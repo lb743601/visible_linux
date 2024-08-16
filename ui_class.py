@@ -10,6 +10,56 @@ import motor_class
 import numpy as np
 import datetime
 from PIL import Image
+import h5py
+import sys
+sys.path.append('/home/jetson/Downloads/mst++/MST-plus-plus-master/predict_code/')
+import run
+import os
+class outmulti(QThread):
+    finish_signal = pyqtSignal(str)
+    
+    def __init__(self, main_app):
+        super().__init__()
+        self.main_app = main_app
+    
+    def run(self):
+        self.input_path = self.main_app.ui.lineEdit_6.text()
+        if self.input_path != "":
+            # 获取MAT文件的目录和文件名
+            file_dir, file_name = os.path.split(self.input_path)
+            # 获取MAT文件名（不包括扩展名）
+            folder_name = os.path.splitext(file_name)[0]
+            # 创建与MAT文件同级的新文件夹
+            output_folder = os.path.join(file_dir, folder_name)
+            os.makedirs(output_folder, exist_ok=True)
+            with h5py.File(self.input_path, 'r') as f:
+                cube_data = f['cube']
+                num_images, height, width = cube_data.shape
+                for i in range(num_images):
+                    image_data = cube_data[i, :, :]
+                    image_data = (image_data - image_data.min()) / (image_data.max() - image_data.min()) * 255
+                    image_data = image_data.astype(np.uint8)
+                    image_data = np.transpose(image_data)
+                    image = Image.fromarray(image_data, mode='L')
+                    image_path = os.path.join(output_folder, f"image_{i+1}.bmp")
+                    image.save(image_path)
+            self.finish_signal.emit("finish output multi")
+        else:
+            self.finish_signal.emit("failed output multi")
+class construct(QThread):
+    finish_signal = pyqtSignal(str)
+    def __init__(self,main_app):
+        super().__init__()
+        self.main_app=main_app
+    def run(self):
+        self.model_path=self.main_app.ui.lineEdit_4.text()
+        self.input_image_path=self.main_app.ui.lineEdit_7.text()
+        self.output_path=self.main_app.ui.lineEdit_5.text()
+        if(self.model_path!="" and self.input_image_path!="" and  self.output_path!=""):
+            run.exc(self.model_path,self.input_image_path,self.output_path)
+            self.finish_signal.emit("finish construct")  
+        else:
+            self.finish_signal.emit("failed construct")  
 class autothread(QThread):
     finish_signal = pyqtSignal(str)
     update_image_signal = pyqtSignal(np.ndarray)
@@ -17,17 +67,15 @@ class autothread(QThread):
         super().__init__()
         self.main_app=main_app
     def run(self):
-        
-        
         self.main_app.judge_dir()
         width,height=self.main_app.cam_data.shape
         self.rgb_data=np.zeros((3,width,height))
         for i in range(3):
             self.rgb_data[i]=self.main_app.cam_data
             self.main_app.mot.send_data('start_pwm(200,72,4267)')
-            time.sleep(1.5)
+            time.sleep(2)
         self.update_image_signal.emit(self.rgb_data)
-        self.finish_signal.emit("finish")    
+        self.finish_signal.emit("finish auto capture")    
     
 class MyApp(QtWidgets.QMainWindow):
     def __init__(self):
@@ -44,6 +92,9 @@ class MyApp(QtWidgets.QMainWindow):
         self.ui.pushButton.clicked.connect(self.open_camera)
         self.ui.textBrowser.setReadOnly(True)
         self.ui.lineEdit_3.setReadOnly(True)
+        self.ui.lineEdit_4.setReadOnly(True)
+        self.ui.lineEdit_5.setReadOnly(True)
+        self.ui.lineEdit_6.setReadOnly(True)
         self.update_timer=QTimer()
         self.update_timer.timeout.connect(self.update_image)
         self.ui.pushButton_2.clicked.connect(self.set_ex)
@@ -57,6 +108,13 @@ class MyApp(QtWidgets.QMainWindow):
         self.ui.pushButton_6.clicked.connect(self.viewfile)
         self.ui.pushButton_7.clicked.connect(self.save_single_image)
         self.ui.pushButton_8.clicked.connect(self.auto)
+        self.ui.pushButton_11.clicked.connect(self.viewfile2)
+        self.ui.pushButton_14.clicked.connect(self.open_file_dialog3)
+        self.ui.pushButton_10.clicked.connect(self.open_file_dialog)
+        self.ui.pushButton_9.clicked.connect(self.open_file_dialog)
+        self.ui.pushButton_16.clicked.connect(self.open_file_dialog2)
+        self.ui.pushButton_12.clicked.connect(self.constr)
+        self.ui.pushButton_13.clicked.connect(self.outmulti)
         #界面相关内容
         self.mot=motor_class.mot()
         self.mot_flag=False
@@ -65,9 +123,12 @@ class MyApp(QtWidgets.QMainWindow):
         self.t=autothread(self)
         self.t.finish_signal.connect(self.update_text)
         self.t.update_image_signal.connect(self.save_rgb_image)
+        self.construct_thread=construct(self)
+        self.construct_thread.finish_signal.connect(self.update_text)
+        self.out_thread=outmulti(self)
+        self.out_thread.finish_signal.connect(self.update_text)
     def open_camera(self):
         if self.ui.pushButton.text()=="open the camera":
-            print("open")
             self.cam.start()
             self.update_timer.start(1)
             self.ui.pushButton.setText("close the camera")
@@ -92,7 +153,7 @@ class MyApp(QtWidgets.QMainWindow):
     def save_rgb_image(self,rgb_data):
         if self.cam_flag:
             if self.ui.lineEdit_3.text()=="":
-                save_path="./visible"
+                save_path="/home/jetson/Downloads/visible/data"
             else:
                 save_path=self.ui.lineEdit_3.text()
             current_time = datetime.datetime.now().strftime('%Y-%m-%d-%H_%M_%S')
@@ -108,7 +169,7 @@ class MyApp(QtWidgets.QMainWindow):
     def save_single_image(self):
         if self.cam_flag:
             if self.ui.lineEdit_3.text()=="":
-                save_path="./visible"
+                save_path="/home/jetson/Downloads/visible/data"
             else:
                 save_path=self.ui.lineEdit_3.text()
             current_time = datetime.datetime.now().strftime('%Y-%m-%d-%H_%M_%S')
@@ -124,6 +185,22 @@ class MyApp(QtWidgets.QMainWindow):
         # 如果用户选择了目录，将其路径显示在文本框中
         if directory:
             self.ui.lineEdit_3.setText(directory)
+    def viewfile2(self):
+        directory = QtWidgets.QFileDialog.getExistingDirectory(self, "选择目录", "")
+        if directory:
+            self.ui.lineEdit_5.setText(directory)
+    def open_file_dialog(self):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择文件", "", "All Files (*)")
+        if file_path:
+            self.ui.lineEdit_4.setText(file_path)
+    def open_file_dialog2(self):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择文件", "", "All Files (*)")
+        if file_path:
+            self.ui.lineEdit_7.setText(file_path)
+    def open_file_dialog3(self):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择文件", "", "All Files (*)")
+        if file_path:
+            self.ui.lineEdit_6.setText(file_path)
     def set_ex(self):
         text=self.ui.lineEdit.text()
         try:
@@ -182,8 +259,10 @@ class MyApp(QtWidgets.QMainWindow):
                 self.update_text("set dir 1")
     def auto(self):
         self.t.start()
-        pass
-    
+    def constr(self):
+        self.construct_thread.start()
+    def outmulti(self):
+        self.out_thread.start()
     def send_command(self):
         if self.mot_flag==True:
             self.judge_dir()
